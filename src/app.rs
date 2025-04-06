@@ -27,28 +27,34 @@ impl Default for MyApp {
     }
 }
 
+use egui_extras::Size;
+use egui_extras::StripBuilder;
+
 impl eframe::App for MyApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("My Stream Viewer");
             ui.separator();
 
-            // We can layout in columns:
-            egui::Grid::new("three_column_layout")
-                .num_columns(3)
-                .spacing([20.0, 10.0])
-                .show(ui, |ui| {
-                    // --- Column 1: Root paths ---
-                    ui.vertical(|ui| {
+            // Use StripBuilder to create 3 columns, each taking 1/3 of the width:
+            StripBuilder::new(ui)
+                .size(Size::relative(0.3333)) // column 1
+                .size(Size::relative(0.3333)) // column 2
+                .size(Size::remainder()) // column 3
+                .horizontal(|mut strip| {
+                    // --- Column 1 ---
+                    strip.cell(|ui| {
                         ui.label(format!(
                             "Roots ({} entries)",
                             self.root_paths_text.lines().count()
                         ));
                         egui::ScrollArea::vertical()
+                            .id_salt("roots_scroll")
                             .max_height(200.0)
                             .show(ui, |ui| {
                                 ui.text_edit_multiline(&mut self.root_paths_text);
                             });
+
                         if ui.button("Copy to clipboard").clicked() {
                             ui.ctx().copy_text(self.root_paths_text.clone());
                         }
@@ -56,28 +62,27 @@ impl eframe::App for MyApp {
                             self.refresh_subdirs();
                         }
                     });
-                    ui.end_row();
 
-                    // --- Column 2: Subdirectories ---
-                    ui.vertical(|ui| {
+                    // --- Column 2 ---
+                    strip.cell(|ui| {
                         ui.label(format!(
                             "Subdirs ({} entries)",
                             self.subdirs_text.lines().count()
                         ));
                         egui::ScrollArea::vertical()
+                            .id_salt("subdirs_scroll")
                             .max_height(200.0)
                             .show(ui, |ui| {
                                 ui.text_edit_multiline(&mut self.subdirs_text);
                             });
+
                         if ui.button("Copy to clipboard").clicked() {
                             ui.ctx().copy_text(self.subdirs_text.clone());
                         }
                     });
-                    ui.end_row();
 
-                    // --- Column 3: Search / results ---
-                    ui.vertical(|ui| {
-                        // A small label and then a text box for searching:
+                    // --- Column 3 ---
+                    strip.cell(|ui| {
                         ui.label("Search:");
                         ui.text_edit_singleline(&mut self.search_text);
 
@@ -91,15 +96,16 @@ impl eframe::App for MyApp {
                             self.search_results_text.lines().count()
                         ));
                         egui::ScrollArea::vertical()
+                            .id_salt("search_scroll")
                             .max_height(200.0)
                             .show(ui, |ui| {
                                 ui.text_edit_multiline(&mut self.search_results_text);
                             });
+
                         if ui.button("Copy to clipboard").clicked() {
                             ui.ctx().copy_text(self.search_results_text.clone());
                         }
                     });
-                    ui.end_row();
                 });
         });
     }

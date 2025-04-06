@@ -9,7 +9,7 @@ fn main() -> eyre::Result<()> {
 
     // Options for how to create the native window:
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([320.0, 240.0]),
+        viewport: egui::ViewportBuilder::default().with_inner_size([920.0, 550.0]),
         ..Default::default()
     };
 

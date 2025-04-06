@@ -8,6 +8,7 @@ edition = "2024"
 # cloud_terrastodon_core_user_input = { git = "https://github.com/AAFC-Cloud/Cloud-Terrastodon", rev = "1332247ae3fa97e9ff29b4320666782c86d020e5", version = "0.1.0" }
 color-eyre = "0.6.3"
 eframe = "0.31.1"
+egui_extras = "0.31.1"
 eyre = "0.6.12"
 # ollama-rs = "0.3.0"
 regex = "1.11.1"
