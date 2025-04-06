@@ -125,13 +125,13 @@ impl eframe::App for MyApp {
                         ui.strong("Roots");
                     });
                     header.col(|ui| {
+                        ui.strong("Ignore Patterns");
+                    });
+                    header.col(|ui| {
                         ui.strong("Subdirs");
                     });
                     header.col(|ui| {
                         ui.strong("Search");
-                    });
-                    header.col(|ui| {
-                        ui.strong("Ignore Patterns");
                     });
                 })
                 .body(|mut body| {
