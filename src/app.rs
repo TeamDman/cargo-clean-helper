@@ -2,28 +2,29 @@
 
 use crate::crawler;
 use eframe::egui;
-use egui_extras::{Column, Size, StripBuilder, TableBuilder};
+use egui_extras::Size;
+use egui_extras::StripBuilder;
 use std::sync::mpsc;
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::Receiver;
+use std::sync::mpsc::Sender;
 use tokio::runtime::Handle;
 
+// We'll do a small chunked read so you see the directories appear live!
 const DONE_SIGNAL: &str = "[DONE]";
 
 pub struct MyApp {
     root_paths_text: String,
-    subdirs_data: Vec<String>,
-
-    /// Patterns for directories we want to ignore (.git, etc.)
-    ignore_patterns: Vec<String>,
-    /// A temporary buffer where the user types a new pattern before "Add pattern"
-    new_ignore_pattern: String,
-
+    subdirs_text: String,
     search_text: String,
-    search_results_data: Vec<String>,
+    search_results_text: String,
 
+    // For incremental indexing:
     tx: Sender<String>,
     rx: Receiver<String>,
     indexing_in_progress: bool,
+
+    // We'll hold a handle to the runtime so we can spawn tasks.
+    // It's just a reference to the runtime (the runtime itself lives in main).
     rt_handle: Handle,
 }
 
@@ -33,11 +34,9 @@ impl MyApp {
 
         Self {
             root_paths_text: "D:\\Repos\nG:\\ml\nG:\\Repos".to_owned(),
-            subdirs_data: Vec::new(),
-            ignore_patterns: vec![".git".to_string()], // default ignoring .git
-            new_ignore_pattern: String::new(),
+            subdirs_text: String::new(),
             search_text: String::new(),
-            search_results_data: Vec::new(),
+            search_results_text: String::new(),
             tx,
             rx,
             indexing_in_progress: false,
@@ -45,10 +44,13 @@ impl MyApp {
         }
     }
 
+    /// Called when user clicks "Refresh subdirs"
     fn refresh_subdirs(&mut self) {
-        self.subdirs_data.clear();
+        // Clear old results
+        self.subdirs_text.clear();
         self.indexing_in_progress = true;
 
+        // Copy the lines from the UI to spawn in background:
         let lines: Vec<String> = self
             .root_paths_text
             .lines()
@@ -57,14 +59,19 @@ impl MyApp {
             .collect();
 
         let tx_clone = self.tx.clone();
-        // Clone ignore_patterns so we can move it into the blocking task:
-        let ignore_patterns_clone = self.ignore_patterns.clone();
 
+        // We'll spawn an async task, but `walkdir` is blocking, so let's use spawn_blocking:
         self.rt_handle.spawn(async move {
             tokio::task::spawn_blocking(move || {
                 for root in lines {
-                    crawler::gather_descendant_dirs_streaming(&root, &tx_clone, &ignore_patterns_clone);
+                    // For each subfolder discovered, send them incrementally:
+                    crawler::gather_descendant_dirs_streaming(
+                        &root,
+                        &tx_clone,
+                        &[".git".to_string()],
+                    );
                 }
+                // once done:
                 let _ = tx_clone.send(DONE_SIGNAL.to_owned());
             })
             .await
@@ -74,53 +81,49 @@ impl MyApp {
 
     fn run_search(&mut self) {
         let needle = self.search_text.trim().to_lowercase();
-        let results = self
-            .subdirs_data
-            .iter()
-            .filter(|subdir| subdir.to_lowercase().contains(&needle))
-            .cloned()
-            .collect();
-        self.search_results_data = results;
-    }
+        let mut results = Vec::new();
 
-    /// Adds a new pattern from `new_ignore_pattern` if it's not empty.
-    fn add_ignore_pattern(&mut self) {
-        let pattern = self.new_ignore_pattern.trim();
-        if !pattern.is_empty() {
-            self.ignore_patterns.push(pattern.to_owned());
+        for line in self.subdirs_text.lines() {
+            if line.to_lowercase().contains(&needle) {
+                results.push(line.to_owned());
+            }
         }
-        // Clear the text input
-        self.new_ignore_pattern.clear();
+
+        self.search_results_text = results.join("\n");
     }
 }
 
 impl eframe::App for MyApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // 1) Pull from channel:
+        // 1) Read from the channel, gather lines
+        //    If we read [DONE], we set indexing_in_progress = false
+        let mut new_messages = vec![];
         while let Ok(msg) = self.rx.try_recv() {
+            new_messages.push(msg);
+        }
+
+        // 2) Apply them:
+        for msg in new_messages {
             if msg == DONE_SIGNAL {
                 self.indexing_in_progress = false;
             } else {
-                self.subdirs_data.push(msg);
+                self.subdirs_text.push_str(&msg);
+                self.subdirs_text.push('\n');
             }
         }
 
+        // 3) The UI:
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("My Stream Viewer");
             ui.separator();
 
-            // We'll use four columns this time:
-            // 1) Root paths
-            // 2) Ignore patterns
-            // 3) Subdirs
-            // 4) Search results
+            // Use StripBuilder to create 3 columns
             StripBuilder::new(ui)
-                .size(Size::relative(0.25))
-                .size(Size::relative(0.25))
-                .size(Size::relative(0.25))
+                .size(Size::relative(0.3333))
+                .size(Size::relative(0.3333))
                 .size(Size::remainder())
                 .horizontal(|mut strip| {
-                    // --- Column 1: Root paths ---
+                    // --- Column 1 ---
                     strip.cell(|ui| {
                         ui.label(format!(
                             "Roots ({} entries)",
@@ -133,10 +136,11 @@ impl eframe::App for MyApp {
                                 ui.text_edit_multiline(&mut self.root_paths_text);
                             });
 
-                        if ui.button("Copy roots to clipboard").clicked() {
+                        if ui.button("Copy to clipboard").clicked() {
                             ui.ctx().copy_text(self.root_paths_text.clone());
                         }
 
+                        // "Refresh subdirs"
                         let refresh_btn = ui.add_enabled(
                             !self.indexing_in_progress,
                             egui::Button::new("Refresh subdirs"),
@@ -146,79 +150,28 @@ impl eframe::App for MyApp {
                         }
 
                         if self.indexing_in_progress {
-                            ui.colored_label(egui::Color32::YELLOW, "Indexing in progress…");
+                            ui.label("Indexing in progress…");
                         }
                     });
 
-                    // --- Column 2: Ignore patterns ---
+                    // --- Column 2 ---
                     strip.cell(|ui| {
-                        ui.label("Ignore patterns (prunes entire sub-tree)");
-                        ui.horizontal(|ui| {
-                            // Text box for new pattern
-                            ui.text_edit_singleline(&mut self.new_ignore_pattern);
-                            if ui.button("Add").clicked() {
-                                self.add_ignore_pattern();
-                            }
-                        });
-
-                        // Show each pattern with a minus button to remove it
-                        egui::ScrollArea::vertical()
-                            .id_salt("ignore_scroll")
-                            .max_height(200.0)
-                            .show(ui, |ui| {
-                                let mut remove_indices = Vec::new();
-                                for (i, pat) in self.ignore_patterns.iter().enumerate() {
-                                    ui.horizontal(|ui| {
-                                        ui.label(pat);
-                                        if ui.button("-").clicked() {
-                                            remove_indices.push(i);
-                                        }
-                                    });
-                                }
-
-                                // Actually remove patterns after we finish iteration:
-                                for &i in remove_indices.iter().rev() {
-                                    self.ignore_patterns.remove(i);
-                                }
-                            });
-                    });
-
-                    // --- Column 3: Subdirs Table ---
-                    strip.cell(|ui| {
-                        ui.label(format!("Subdirs ({} entries)", self.subdirs_data.len()));
-
+                        ui.label(format!(
+                            "Subdirs ({} entries)",
+                            self.subdirs_text.lines().count()
+                        ));
                         egui::ScrollArea::vertical()
                             .id_salt("subdirs_scroll")
-                            .max_height(300.0)
+                            .max_height(200.0)
                             .show(ui, |ui| {
-                                let row_height = ui.text_style_height(&egui::TextStyle::Body);
-                                TableBuilder::new(ui)
-                                    .striped(true)
-                                    .resizable(true)
-                                    .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                                    .column(Column::auto())      // index
-                                    .column(Column::remainder()) // path
-                                    .body(|mut body| {
-                                        for (i, subdir) in self.subdirs_data.iter().enumerate() {
-                                            body.row(row_height, |mut row| {
-                                                row.col(|ui| {
-                                                    ui.label(i.to_string());
-                                                });
-                                                row.col(|ui| {
-                                                    ui.label(subdir);
-                                                });
-                                            });
-                                        }
-                                    });
+                                ui.text_edit_multiline(&mut self.subdirs_text);
                             });
-
-                        if ui.button("Copy subdirs to clipboard").clicked() {
-                            let text = self.subdirs_data.join("\n");
-                            ui.ctx().copy_text(text);
+                        if ui.button("Copy to clipboard").clicked() {
+                            ui.ctx().copy_text(self.subdirs_text.clone());
                         }
                     });
 
-                    // --- Column 4: Search & Results Table ---
+                    // --- Column 3 ---
                     strip.cell(|ui| {
                         ui.label("Search:");
                         ui.text_edit_singleline(&mut self.search_text);
@@ -230,47 +183,20 @@ impl eframe::App for MyApp {
                         ui.separator();
                         ui.label(format!(
                             "Results ({} entries)",
-                            self.search_results_data.len()
+                            self.search_results_text.lines().count()
                         ));
-
                         egui::ScrollArea::vertical()
                             .id_salt("search_scroll")
-                            .max_height(300.0)
+                            .max_height(200.0)
                             .show(ui, |ui| {
-                                let row_height = ui.text_style_height(&egui::TextStyle::Body);
-                                TableBuilder::new(ui)
-                                    .striped(true)
-                                    .resizable(true)
-                                    .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                                    .column(Column::auto())
-                                    .column(Column::remainder())
-                                    .body(|mut body| {
-                                        for (i, result) in
-                                            self.search_results_data.iter().enumerate()
-                                        {
-                                            body.row(row_height, |mut row| {
-                                                row.col(|ui| {
-                                                    ui.label(i.to_string());
-                                                });
-                                                row.col(|ui| {
-                                                    ui.label(result);
-                                                });
-                                            });
-                                        }
-                                    });
+                                ui.text_edit_multiline(&mut self.search_results_text);
                             });
 
-                        if ui.button("Copy results to clipboard").clicked() {
-                            let text = self.search_results_data.join("\n");
-                            ui.ctx().copy_text(text);
+                        if ui.button("Copy to clipboard").clicked() {
+                            ui.ctx().copy_text(self.search_results_text.clone());
                         }
                     });
                 });
         });
-
-        // If you want continuous redraw while indexing:
-        if self.indexing_in_progress {
-            ctx.request_repaint();
-        }
     }
 }
