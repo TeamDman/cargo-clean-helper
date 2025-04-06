@@ -2,14 +2,14 @@
 
 use crate::crawler;
 use eframe::egui;
-use egui_extras::Size;
-use egui_extras::StripBuilder;
+use egui_extras::Column;
+use egui_extras::TableBuilder;
 use std::sync::mpsc;
 use std::sync::mpsc::Receiver;
 use std::sync::mpsc::Sender;
 use tokio::runtime::Handle;
 
-// We'll do a small chunked read so you see the directories appear live!
+// We'll do a small chunked read so you see directories appear live!
 const DONE_SIGNAL: &str = "[DONE]";
 
 pub struct MyApp {
@@ -24,8 +24,11 @@ pub struct MyApp {
     indexing_in_progress: bool,
 
     // We'll hold a handle to the runtime so we can spawn tasks.
-    // It's just a reference to the runtime (the runtime itself lives in main).
     rt_handle: Handle,
+
+    // New for ignore patterns:
+    ignore_patterns: Vec<String>,
+    new_pattern_input: String,
 }
 
 impl MyApp {
@@ -41,16 +44,16 @@ impl MyApp {
             rx,
             indexing_in_progress: false,
             rt_handle,
+            ignore_patterns: vec![".git".to_owned()],
+            new_pattern_input: String::new(),
         }
     }
 
     /// Called when user clicks "Refresh subdirs"
     fn refresh_subdirs(&mut self) {
-        // Clear old results
         self.subdirs_text.clear();
         self.indexing_in_progress = true;
 
-        // Copy the lines from the UI to spawn in background:
         let lines: Vec<String> = self
             .root_paths_text
             .lines()
@@ -58,20 +61,15 @@ impl MyApp {
             .filter(|line| !line.is_empty())
             .collect();
 
+        // Copy current ignore patterns into local variable for the background thread
+        let ignore_list = self.ignore_patterns.clone();
         let tx_clone = self.tx.clone();
 
-        // We'll spawn an async task, but `walkdir` is blocking, so let's use spawn_blocking:
         self.rt_handle.spawn(async move {
             tokio::task::spawn_blocking(move || {
                 for root in lines {
-                    // For each subfolder discovered, send them incrementally:
-                    crawler::gather_descendant_dirs_streaming(
-                        &root,
-                        &tx_clone,
-                        &[".git".to_string()],
-                    );
+                    crawler::gather_descendant_dirs_streaming(&root, &tx_clone, &ignore_list);
                 }
-                // once done:
                 let _ = tx_clone.send(DONE_SIGNAL.to_owned());
             })
             .await
@@ -95,14 +93,13 @@ impl MyApp {
 
 impl eframe::App for MyApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // 1) Read from the channel, gather lines
-        //    If we read [DONE], we set indexing_in_progress = false
+        // 1) Read from channel
         let mut new_messages = vec![];
         while let Ok(msg) = self.rx.try_recv() {
             new_messages.push(msg);
         }
 
-        // 2) Apply them:
+        // 2) Apply them
         for msg in new_messages {
             if msg == DONE_SIGNAL {
                 self.indexing_in_progress = false;
@@ -112,89 +109,137 @@ impl eframe::App for MyApp {
             }
         }
 
-        // 3) The UI:
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("My Stream Viewer");
+            ui.heading("Cargo Clean Helper");
             ui.separator();
 
-            // Use StripBuilder to create 3 columns
-            StripBuilder::new(ui)
-                .size(Size::relative(0.3333))
-                .size(Size::relative(0.3333))
-                .size(Size::remainder())
-                .horizontal(|mut strip| {
-                    // --- Column 1 ---
-                    strip.cell(|ui| {
-                        ui.label(format!(
-                            "Roots ({} entries)",
-                            self.root_paths_text.lines().count()
-                        ));
-                        egui::ScrollArea::vertical()
-                            .id_salt("roots_scroll")
-                            .max_height(200.0)
-                            .show(ui, |ui| {
-                                ui.text_edit_multiline(&mut self.root_paths_text);
-                            });
-
-                        if ui.button("Copy to clipboard").clicked() {
-                            ui.ctx().copy_text(self.root_paths_text.clone());
-                        }
-
-                        // "Refresh subdirs"
-                        let refresh_btn = ui.add_enabled(
-                            !self.indexing_in_progress,
-                            egui::Button::new("Refresh subdirs"),
-                        );
-                        if refresh_btn.clicked() {
-                            self.refresh_subdirs();
-                        }
-
-                        if self.indexing_in_progress {
-                            ui.label("Indexing in progress…");
-                        }
+            TableBuilder::new(ui)
+                .resizable(true)
+                .striped(true)
+                .column(Column::remainder().at_least(150.0)) // "Roots"
+                .column(Column::remainder().at_least(150.0)) // "Subdirs"
+                .column(Column::remainder().at_least(150.0)) // "Search"
+                .column(Column::remainder().at_least(150.0)) // "Ignore Patterns"
+                .header(20.0, |mut header| {
+                    header.col(|ui| {
+                        ui.strong("Roots");
                     });
-
-                    // --- Column 2 ---
-                    strip.cell(|ui| {
-                        ui.label(format!(
-                            "Subdirs ({} entries)",
-                            self.subdirs_text.lines().count()
-                        ));
-                        egui::ScrollArea::vertical()
-                            .id_salt("subdirs_scroll")
-                            .max_height(200.0)
-                            .show(ui, |ui| {
-                                ui.text_edit_multiline(&mut self.subdirs_text);
-                            });
-                        if ui.button("Copy to clipboard").clicked() {
-                            ui.ctx().copy_text(self.subdirs_text.clone());
-                        }
+                    header.col(|ui| {
+                        ui.strong("Subdirs");
                     });
+                    header.col(|ui| {
+                        ui.strong("Search");
+                    });
+                    header.col(|ui| {
+                        ui.strong("Ignore Patterns");
+                    });
+                })
+                .body(|mut body| {
+                    // We only need a single row here, each cell is its own vertical chunk:
+                    body.row(0.0, |mut row| {
+                        // --- Roots Column ---
+                        row.col(|ui| {
+                            ui.label(format!(
+                                "Roots ({} entries)",
+                                self.root_paths_text.lines().count()
+                            ));
+                            egui::ScrollArea::vertical()
+                                .max_height(200.0)
+                                .show(ui, |ui| {
+                                    ui.text_edit_multiline(&mut self.root_paths_text);
+                                });
 
-                    // --- Column 3 ---
-                    strip.cell(|ui| {
-                        ui.label("Search:");
-                        ui.text_edit_singleline(&mut self.search_text);
+                            if ui.button("Copy to clipboard").clicked() {
+                                ui.ctx().copy_text(self.root_paths_text.clone());
+                            }
 
-                        if ui.button("Run search").clicked() {
-                            self.run_search();
-                        }
+                            let refresh_btn = ui.add_enabled(
+                                !self.indexing_in_progress,
+                                egui::Button::new("Refresh subdirs"),
+                            );
+                            if refresh_btn.clicked() {
+                                self.refresh_subdirs();
+                            }
 
-                        ui.separator();
-                        ui.label(format!(
-                            "Results ({} entries)",
-                            self.search_results_text.lines().count()
-                        ));
-                        egui::ScrollArea::vertical()
-                            .id_salt("search_scroll")
-                            .max_height(200.0)
-                            .show(ui, |ui| {
-                                ui.text_edit_multiline(&mut self.search_results_text);
+                            if self.indexing_in_progress {
+                                ui.label("Indexing in progress…");
+                            }
+                        });
+
+                        // --- Ignore Patterns Column ---
+                        row.col(|ui| {
+                            ui.label("Add new ignore pattern:");
+                            ui.horizontal(|ui| {
+                                ui.text_edit_singleline(&mut self.new_pattern_input);
+                                if ui.button("Add").clicked() {
+                                    if !self.new_pattern_input.trim().is_empty() {
+                                        self.ignore_patterns
+                                            .push(self.new_pattern_input.trim().to_string());
+                                        self.new_pattern_input.clear();
+                                    }
+                                }
                             });
 
-                        if ui.button("Copy to clipboard").clicked() {
-                            ui.ctx().copy_text(self.search_results_text.clone());
-                        }
+                            ui.separator();
+                            ui.label("Current ignore patterns:");
+                            let mut remove_index = None;
+                            for i in 0..self.ignore_patterns.len() {
+                                let pattern = self.ignore_patterns[i].clone(); // clone so we don’t borrow immutably
+                                ui.horizontal(|ui| {
+                                    ui.label(&pattern);
+                                    if ui.button("-").clicked() {
+                                        remove_index = Some(i);
+                                    }
+                                });
+                                if remove_index.is_some() {
+                                    break;
+                                }
+                            }
+                            if let Some(i) = remove_index {
+                                self.ignore_patterns.remove(i);
+                            }
+                        });
+
+                        // --- Subdirs Column ---
+                        row.col(|ui| {
+                            ui.label(format!(
+                                "Subdirs ({} entries)",
+                                self.subdirs_text.lines().count()
+                            ));
+                            egui::ScrollArea::vertical()
+                                .max_height(200.0)
+                                .show(ui, |ui| {
+                                    ui.text_edit_multiline(&mut self.subdirs_text);
+                                });
+                            if ui.button("Copy to clipboard").clicked() {
+                                ui.ctx().copy_text(self.subdirs_text.clone());
+                            }
+                        });
+
+                        // --- Search Column ---
+                        row.col(|ui| {
+                            ui.label("Search:");
+                            ui.text_edit_singleline(&mut self.search_text);
+
+                            if ui.button("Run search").clicked() {
+                                self.run_search();
+                            }
+
+                            ui.separator();
+                            ui.label(format!(
+                                "Results ({} entries)",
+                                self.search_results_text.lines().count()
+                            ));
+                            egui::ScrollArea::vertical()
+                                .max_height(200.0)
+                                .show(ui, |ui| {
+                                    ui.text_edit_multiline(&mut self.search_results_text);
+                                });
+
+                            if ui.button("Copy to clipboard").clicked() {
+                                ui.ctx().copy_text(self.search_results_text.clone());
+                            }
+                        });
                     });
                 });
         });
