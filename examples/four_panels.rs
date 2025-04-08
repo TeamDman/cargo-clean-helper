@@ -5,6 +5,8 @@ use eframe::egui::ViewportBuilder;
 use eframe::egui::{self};
 use egui::ScrollArea;
 use egui::Ui;
+use egui_extras::Column;
+use egui_extras::TableBuilder;
 use rand::Rng;
 use rand::distr::Alphanumeric;
 use std::iter;
@@ -42,40 +44,40 @@ impl Default for FourColumnApp {
 
 impl App for FourColumnApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        egui::SidePanel::left("column1")
-            .resizable(true)
-            .default_width(self.col1_width)
-            .width_range(100.0..=300.0)
-            .show(ctx, |ui| {
-                ui.heading("Column 1");
-                ui.label("Content for column 1");
-                self.col1_width = ui.available_width();
-            });
-
-        egui::SidePanel::left("column2")
-            .resizable(true)
-            .default_width(self.col2_width)
-            .width_range(100.0..=300.0)
-            .show(ctx, |ui| {
-                ui.heading("Column 2");
-                ui.label("Content for column 2");
-                self.col2_width = ui.available_width();
-            });
-
-        egui::SidePanel::left("column3")
-            .resizable(true)
-            .default_width(self.col3_width)
-            .width_range(100.0..=300.0)
-            .show(ctx, |ui| {
-                ui.heading("Column 3");
-                self.render_column_3(ui);
-                self.col3_width = ui.available_width();
-            });
-
-        // The rest of the screen is automatically column 4
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("Column 4");
-            ui.label("Content for column 4");
+            let height = ui.available_height();
+            TableBuilder::new(ui)
+                .resizable(true)
+                .column(Column::initial(self.col1_width).at_least(150.0))
+                .column(Column::initial(self.col2_width).at_least(150.0))
+                .column(Column::remainder().at_least(150.0))
+                .column(Column::initial(self.col3_width).at_least(150.0))
+                .body(|mut body| {
+                    body.row(height, |mut row| {
+                        row.col(|ui| {
+                            ui.label("Column 1");
+                            ui.horizontal(|ui| {
+                                ui.label("Content for column 1");
+                            });
+                        });
+                        row.col(|ui| {
+                            ui.label("Column 2");
+                            ui.horizontal(|ui| {
+                                ui.label("Content for column 2");
+                            });
+                        });
+                        row.col(|ui| {
+                            ui.label("Column 3");
+                            self.render_column_3(ui);
+                        });
+                        row.col(|ui| {
+                            ui.label("Column 4");
+                            ui.horizontal(|ui| {
+                                ui.label("Content for column 4");
+                            });
+                        });
+                    })
+                });
         });
     }
 }
@@ -126,7 +128,7 @@ impl FourColumnApp {
 
 fn main() -> Result<(), eframe::Error> {
     let options = NativeOptions {
-        viewport: ViewportBuilder::default().with_inner_size((800.0, 600.0)),
+        viewport: ViewportBuilder::default().with_inner_size((1500.0, 600.0)),
         ..Default::default()
     };
 

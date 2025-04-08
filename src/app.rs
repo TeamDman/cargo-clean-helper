@@ -116,6 +116,7 @@ impl eframe::App for MyApp {
             ui.heading("Cargo Clean Helper");
             ui.separator();
 
+            let height = ui.available_height();
             TableBuilder::new(ui)
                 .resizable(true)
                 .striped(true)
@@ -139,7 +140,7 @@ impl eframe::App for MyApp {
                 })
                 .body(|mut body| {
                     // We only need a single row here, each cell is its own vertical chunk:
-                    body.row(0.0, |mut row| {
+                    body.row(height, |mut row| {
                         // --- Roots Column ---
                         row.col(|ui| {
                             ui.label(format!("Roots ({} entries)", self.root_dirs.len()));
