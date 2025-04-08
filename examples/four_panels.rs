@@ -22,7 +22,7 @@ struct FourColumnApp {
 impl Default for FourColumnApp {
     fn default() -> Self {
         // Generate 10,000 random strings of length 256
-        let mut rng = rand::rng();
+        let mut rng = rand::thread_rng();
         let strings: Vec<String> = (0..10_000)
             .map(|_| {
                 iter::repeat(())
@@ -89,27 +89,39 @@ impl FourColumnApp {
         let spacing = 8.0;
 
         // Reserve space for the button and spacing at the bottom
-        let scroll_height = ui.available_height() - button_height - spacing;
+        let table_height = ui.available_height() - button_height - spacing;
+        let selected_idx = &mut self.selected_idx;
 
-        // Scroll area that takes the remaining space
-        ScrollArea::vertical()
-            .auto_shrink([false; 2])
-            .max_height(scroll_height)
-            .show(ui, |ui| {
-                for (idx, string) in self.strings.iter().enumerate() {
-                    let is_selected = self.selected_idx == Some(idx);
-
-                    // Show a truncated version of the string
-                    let display_str = if string.len() > 20 {
-                        format!("#{}: {}...", idx, &string[..20])
-                    } else {
-                        format!("#{}: {}", idx, string)
-                    };
-
-                    if ui.selectable_label(is_selected, display_str).clicked() {
-                        self.selected_idx = Some(idx);
-                    }
-                }
+        // Use a table to display the strings
+        TableBuilder::new(ui)
+            .striped(true)
+            .resizable(true)
+            .column(Column::remainder())
+            .max_scroll_height(table_height)
+            .header(20.0, |mut header| {
+                header.col(|ui| {
+                    ui.strong(format!("Strings ({})", self.strings.len()));
+                });
+            })
+            .body(|body| {
+                body.rows(24.0, self.strings.len(), |mut row| {
+                    let row_idx = row.index();
+                    row.col(|ui| {
+                        let string = &self.strings[row_idx];
+                        
+                        // Show a truncated version of the string
+                        let display_str = if string.len() > 20 {
+                            format!("#{}: {}...", row_idx, &string[..20])
+                        } else {
+                            format!("#{}: {}", row_idx, string)
+                        };
+                        
+                        let is_selected = *selected_idx == Some(row_idx);
+                        if ui.selectable_label(is_selected, display_str).clicked() {
+                            *selected_idx = Some(row_idx);
+                        }
+                    });
+                });
             });
 
         ui.add_space(spacing);
@@ -118,8 +130,7 @@ impl FourColumnApp {
         if ui.button("Copy to Clipboard").clicked() {
             if let Some(idx) = self.selected_idx {
                 ui.output_mut(|o| {
-                    o.commands
-                        .push(egui::OutputCommand::CopyText(self.strings[idx].clone()))
+                    o.copied_text = self.strings[idx].clone();
                 });
             }
         }
@@ -128,7 +139,7 @@ impl FourColumnApp {
 
 fn main() -> Result<(), eframe::Error> {
     let options = NativeOptions {
-        viewport: ViewportBuilder::default().with_inner_size((1500.0, 600.0)),
+        viewport: ViewportBuilder::default().with_inner_size([1500.0, 600.0]),
         ..Default::default()
     };
 

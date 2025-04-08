@@ -1,5 +1,6 @@
 use crate::crawler;
 use eframe::egui;
+use eframe::egui::ScrollArea;
 use egui_extras::Column;
 use egui_extras::TableBuilder;
 use itertools::Itertools;
@@ -214,23 +215,26 @@ fn show_subdirs_col(app: &mut MyApp, ui: &mut egui::Ui) {
         // Calculate available height for the table
         let available_height = ui.available_height() - 60.0; // Reserve space for button and spacing
 
-        // Create the table for subdirectories
-        TableBuilder::new(ui)
-            .id_salt("subdirs_table")
-            .resizable(true)
-            .striped(true)
-            .column(Column::initial(400.0).at_least(200.0).resizable(true))
-            .max_scroll_height(available_height)
-            .body(|body| {
-                let mut index = 0;
-                body.rows(20.0, app.subdirs.len(), |mut row| {
-                    let subdir = &app.subdirs[index];
-                    row.col(|ui| {
-                        ui.label(subdir.display().to_string());
+        ScrollArea::horizontal().show(ui, |ui| {
+            // Create the table for subdirectories
+            TableBuilder::new(ui)
+                .id_salt("subdirs_table")
+                .resizable(false)
+                .striped(true)
+                // .column(Column::initial(400.0).at_least(200.0).resizable(true))
+                .column(Column::remainder())
+                .max_scroll_height(available_height)
+                .body(|body| {
+                    body.rows(20.0, app.subdirs.len(), |mut row| {
+                        let subdir = &app.subdirs[row.index()];
+                        row.col(|ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(subdir.display().to_string());
+                            });
+                        });
                     });
-                    index += 1;
                 });
-            });
+        });
 
         // Add some spacing before the button
         ui.add_space(5.0);
