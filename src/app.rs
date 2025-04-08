@@ -4,23 +4,28 @@ use crate::crawler;
 use eframe::egui;
 use egui_extras::Column;
 use egui_extras::TableBuilder;
+use itertools::Itertools;
+use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::mpsc::Receiver;
 use std::sync::mpsc::Sender;
 use tokio::runtime::Handle;
 
 // We'll do a small chunked read so you see directories appear live!
-const DONE_SIGNAL: &str = "[DONE]";
+pub enum AppMessage {
+    Subdir(PathBuf),
+    Done,
+}
 
 pub struct MyApp {
-    root_paths_text: String,
-    subdirs_text: String,
+    root_dirs: Vec<PathBuf>,
     search_text: String,
-    search_results_text: String,
+    subdirs: Vec<PathBuf>,
+    search_results: Option<(String, Vec<PathBuf>)>,
 
     // For incremental indexing:
-    tx: Sender<String>,
-    rx: Receiver<String>,
+    tx: Sender<AppMessage>,
+    rx: Receiver<AppMessage>,
     indexing_in_progress: bool,
 
     // We'll hold a handle to the runtime so we can spawn tasks.
@@ -36,10 +41,12 @@ impl MyApp {
         let (tx, rx) = mpsc::channel();
 
         Self {
-            root_paths_text: "D:\\Repos\nG:\\ml\nG:\\Repos".to_owned(),
-            subdirs_text: String::new(),
+            root_dirs: vec!["D:\\Repos".into(), "G:\\ml".into(), "G:\\Repos".into()],
+            subdirs: (1..2000)
+                .map(|i| PathBuf::from(format!("Subdir {} - {}", i, "asd".repeat(45))))
+                .collect(),
             search_text: String::new(),
-            search_results_text: String::new(),
+            search_results: None,
             tx,
             rx,
             indexing_in_progress: false,
@@ -51,26 +58,20 @@ impl MyApp {
 
     /// Called when user clicks "Refresh subdirs"
     fn refresh_subdirs(&mut self) {
-        self.subdirs_text.clear();
+        self.subdirs.clear();
+        self.search_results = None;
         self.indexing_in_progress = true;
-
-        let lines: Vec<String> = self
-            .root_paths_text
-            .lines()
-            .map(|line| line.trim().to_owned())
-            .filter(|line| !line.is_empty())
-            .collect();
 
         // Copy current ignore patterns into local variable for the background thread
         let ignore_list = self.ignore_patterns.clone();
         let tx_clone = self.tx.clone();
-
+        let root_dirs = self.root_dirs.clone();
         self.rt_handle.spawn(async move {
             tokio::task::spawn_blocking(move || {
-                for root in lines {
-                    crawler::gather_descendant_dirs_streaming(&root, &tx_clone, &ignore_list);
+                for root in root_dirs {
+                    crawler::gather_descendant_dirs_streaming(root, &tx_clone, &ignore_list);
                 }
-                let _ = tx_clone.send(DONE_SIGNAL.to_owned());
+                let _ = tx_clone.send(AppMessage::Done);
             })
             .await
             .ok();
@@ -81,13 +82,13 @@ impl MyApp {
         let needle = self.search_text.trim().to_lowercase();
         let mut results = Vec::new();
 
-        for line in self.subdirs_text.lines() {
-            if line.to_lowercase().contains(&needle) {
+        for line in &self.subdirs {
+            if line.display().to_string().contains(&needle) {
                 results.push(line.to_owned());
             }
         }
 
-        self.search_results_text = results.join("\n");
+        self.search_results = Some((needle, results));
     }
 }
 
@@ -101,11 +102,13 @@ impl eframe::App for MyApp {
 
         // 2) Apply them
         for msg in new_messages {
-            if msg == DONE_SIGNAL {
-                self.indexing_in_progress = false;
-            } else {
-                self.subdirs_text.push_str(&msg);
-                self.subdirs_text.push('\n');
+            match msg {
+                AppMessage::Subdir(path) => {
+                    self.subdirs.push(path);
+                }
+                AppMessage::Done => {
+                    self.indexing_in_progress = false;
+                }
             }
         }
 
@@ -139,18 +142,24 @@ impl eframe::App for MyApp {
                     body.row(0.0, |mut row| {
                         // --- Roots Column ---
                         row.col(|ui| {
-                            ui.label(format!(
-                                "Roots ({} entries)",
-                                self.root_paths_text.lines().count()
-                            ));
+                            ui.label(format!("Roots ({} entries)", self.root_dirs.len()));
                             egui::ScrollArea::vertical()
                                 .max_height(200.0)
                                 .show(ui, |ui| {
-                                    ui.text_edit_multiline(&mut self.root_paths_text);
+                                    for path in self.root_dirs.iter() {
+                                        ui.horizontal(|ui| {
+                                            ui.label(path.display().to_string());
+                                        });
+                                    }
                                 });
 
                             if ui.button("Copy to clipboard").clicked() {
-                                ui.ctx().copy_text(self.root_paths_text.clone());
+                                ui.ctx().copy_text(
+                                    self.root_dirs
+                                        .iter()
+                                        .map(|x| x.display().to_string())
+                                        .join("\n"),
+                                );
                             }
 
                             let refresh_btn = ui.add_enabled(
@@ -201,19 +210,40 @@ impl eframe::App for MyApp {
                         });
 
                         // --- Subdirs Column ---
+                        // --- Subdirs Column ---
                         row.col(|ui| {
-                            ui.label(format!(
-                                "Subdirs ({} entries)",
-                                self.subdirs_text.lines().count()
-                            ));
-                            egui::ScrollArea::vertical()
-                                .max_height(200.0)
-                                .show(ui, |ui| {
-                                    ui.text_edit_multiline(&mut self.subdirs_text);
+                            ui.vertical(|ui| {
+                                ui.label(format!("Subdirs ({} entries)", self.subdirs.len()));
+
+                                // The scroll area should take most of the available space
+                                let available_height = ui.available_height() - 40.0; // Reserve space for button and spacing
+
+                                egui::ScrollArea::vertical()
+                                    .auto_shrink([false, false])
+                                    .max_height(available_height)
+                                    .show(ui, |ui| {
+                                        for subdir in &self.subdirs {
+                                            ui.horizontal(|ui| {
+                                                ui.label(subdir.display().to_string());
+                                            });
+                                        }
+                                    });
+
+                                // Add some spacing before the button
+                                ui.add_space(5.0);
+
+                                // Center the button horizontally
+                                ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                                    if ui.button("Copy to clipboard").clicked() {
+                                        ui.ctx().copy_text(
+                                            self.subdirs
+                                                .iter()
+                                                .map(|x| x.display().to_string())
+                                                .join("\n"),
+                                        );
+                                    }
                                 });
-                            if ui.button("Copy to clipboard").clicked() {
-                                ui.ctx().copy_text(self.subdirs_text.clone());
-                            }
+                            });
                         });
 
                         // --- Search Column ---
@@ -226,18 +256,27 @@ impl eframe::App for MyApp {
                             }
 
                             ui.separator();
-                            ui.label(format!(
-                                "Results ({} entries)",
-                                self.search_results_text.lines().count()
-                            ));
-                            egui::ScrollArea::vertical()
-                                .max_height(200.0)
-                                .show(ui, |ui| {
-                                    ui.text_edit_multiline(&mut self.search_results_text);
-                                });
-
-                            if ui.button("Copy to clipboard").clicked() {
-                                ui.ctx().copy_text(self.search_results_text.clone());
+                            ui.label(format!("Results ({} entries)", self.subdirs.len()));
+                            if let Some((_query, results)) = &self.search_results {
+                                egui::ScrollArea::vertical()
+                                    .max_height(200.0)
+                                    .show(ui, |ui| {
+                                        for path in results.iter() {
+                                            ui.horizontal(|ui| {
+                                                ui.label(path.display().to_string());
+                                            });
+                                        }
+                                        if ui.button("Copy to clipboard").clicked() {
+                                            ui.ctx().copy_text(
+                                                results
+                                                    .iter()
+                                                    .map(|x| x.display().to_string())
+                                                    .join("\n"),
+                                            );
+                                        }
+                                    });
+                            } else {
+                                ui.label("No results yet.");
                             }
                         });
                     });

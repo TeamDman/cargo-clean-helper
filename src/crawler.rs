@@ -1,7 +1,12 @@
 // src/crawler.rs
 
+use std::path::PathBuf;
 use std::sync::mpsc::Sender;
-use walkdir::{DirEntry, WalkDir};
+use tracing::info;
+use walkdir::DirEntry;
+use walkdir::WalkDir;
+
+use crate::app::AppMessage;
 
 /// Filter function that returns `false` if the path should be skipped.
 fn filter_entry(entry: &DirEntry, ignore_list: &[String]) -> bool {
@@ -14,12 +19,16 @@ fn filter_entry(entry: &DirEntry, ignore_list: &[String]) -> bool {
 /// Collects *all* descendant directories from a root, sending them line-by-line,
 /// but skipping any path containing an ignore pattern.
 pub fn gather_descendant_dirs_streaming(
-    root_path: &str,
-    tx: &Sender<String>,
+    root_path: PathBuf,
+    tx: &Sender<AppMessage>,
     ignore_list: &[String],
 ) {
+    info!(
+        "Starting to gather descendant directories from: {:?}",
+        root_path
+    );
     // Use .filter_entry() to prune directories we want to ignore
-    let walker = WalkDir::new(root_path)
+    let walker = WalkDir::new(&root_path)
         .follow_links(true)
         .into_iter()
         .filter_entry(|e| filter_entry(e, ignore_list));
@@ -27,9 +36,11 @@ pub fn gather_descendant_dirs_streaming(
     for entry_result in walker {
         match entry_result {
             Ok(entry) if entry.file_type().is_dir() => {
-                let path_str = entry.path().display().to_string();
                 // If the receiver side is closed, break
-                if tx.send(path_str).is_err() {
+                if tx
+                    .send(AppMessage::Subdir(entry.path().to_path_buf()))
+                    .is_err()
+                {
                     break;
                 }
             }
@@ -37,4 +48,5 @@ pub fn gather_descendant_dirs_streaming(
             _ => {}
         }
     }
+    info!("Finished gathering directories from: {:?}", root_path);
 }
